@@ -2,7 +2,7 @@ package Router::PathInfo;
 use strict;
 use warnings;
 
-our $VERSION = '0.01';
+our $VERSION = '0.02';
 
 use namespace::autoclean;
 use Carp;
@@ -33,7 +33,8 @@ It has a simple and intuitive interface.
                 path => '/path/to/static',
                 first_uri_segment => 'static'
             }
-        }
+        },
+        cache_limit => 300
     );
         
     $r->add_rule(
@@ -102,11 +103,14 @@ When you work in a mode singletone, you have access to methods: C<instance> and 
 
 =head1 METHODS
 
-=head2 new(static => $static)
+=head2 new(static => $static, cache_limit => $cache_limit)
 
 Constructor. All arguments optsioanlny.
 
 static - it hashref arguments for the constructor L<Router::PathInfo::Static>
+
+cache_limit - limit of matches stored by the rules contain tokens C<:re> and C<:any>, statics and errors. By default - 200.
+All matches (that occur on an accurate description) cached without limit.
 
 =cut
 
@@ -120,7 +124,11 @@ sub new {
     
     my $self = bless {
         static      => UNIVERSAL::isa($param->{static}, 'HASH')     ? Router::PathInfo::Static->new(%{delete $param->{static}}) : undef,
-        controller  => UNIVERSAL::isa($param->{controller}, 'HASH') ? Router::PathInfo::Controller->new(%{delete $param->{controller}}) : Router::PathInfo::Controller->new()
+        controller  => UNIVERSAL::isa($param->{controller}, 'HASH') ? Router::PathInfo::Controller->new(%{delete $param->{controller}}) : Router::PathInfo::Controller->new(),
+        cache                   => {},
+        _hidden_cache           => {},
+        cache_limit             => (defined $param->{cache_limit} and $param->{cache_limit}) =~ /^\d+$/ ? $param->{cache_limit} : 200,
+        cache_cnt               => 0
     }, $class;
     
     $singleton = $self if $as_singletone;
@@ -137,6 +145,8 @@ sub add_rule {
     my $self = shift;
     my $ret = 0;
     if ($self->{controller}) {
+        $self->{cache_cnt}  = 0;
+        $self->{cache}      = {};
         $self->{controller}->add_rule(@_);
     } else {
         carp "controller not defined";
@@ -196,6 +206,11 @@ sub match {
       desc  => '$env->{PATH_INFO} not defined'  
     } unless $env->{PATH_INFO};
     
+    # find in cache
+    my $cache_key = join('#',$env->{PATH_INFO}, $env->{REQUEST_METHOD});
+    my $cache_match = $self->{cache}->{$cache_key} || $self->{_hidden_cache}->{$cache_key};
+    return $cache_match if $cache_match;
+    
     my @segment = split '/', $env->{PATH_INFO}, -1; shift @segment;
     $env->{'psgix.tmp.RouterPathInfo'} = {
         segments => [@segment],
@@ -208,9 +223,11 @@ sub match {
     }
     
     # check in controllers
+    # $not_exactly - match with regexp
+    my $not_exactly = 0;
     if (not $match and $self->{controller}) {
-        $match = $self->{controller}->match($env);
-    }    
+        ($not_exactly, $match) = $self->{controller}->match($env);
+    }
     
     # not found?
     $match ||= {
@@ -220,6 +237,19 @@ sub match {
     };
     
     delete $env->{'psgix.tmp.RouterPathInfo'};
+    
+    # cache!
+    if (not $not_exactly and $match->{type} eq 'controller') {
+        $self->{_hidden_cache}->{$cache_key} = $match;
+    } elsif ($self->{cache_limit}) {
+        if ($self->{cache_cnt} > $self->{cache_limit}) {
+            $self->{cache_cnt} = 0;
+            $self->{cache} = {};
+        } else {
+            $self->{cache_cnt}++;
+        }
+        $self->{cache}->{$cache_key} = $match;        
+    }
     
     # match is done
     return $match;
