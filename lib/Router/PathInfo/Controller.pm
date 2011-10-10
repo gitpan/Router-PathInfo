@@ -48,11 +48,15 @@ In the descriptions of 'C<connect>' by adding rules, you can use these tokens:
     :re(...some regular expression...)   - match with the specified regular expression
     :enum(...|...)                       - match with a segment from the set
 
+and sub-attribute for rules
+    
+    :name(...)
+
 For example
     
-    '/foo/bar/:any'
-    '/foo/:re(:re(^\d{4}\w{4}$))/:any'
-    '/:enum(foo|bar|baz)/:re(:re(^\d{4}\w{4}$))/:any'
+    '/foo/:name(some_name)bar/:any'
+    '/foo/:re(^\d{4}\w{4}$)/:name(my_token):any'
+    '/:enum(foo|bar|baz)/:re(^\d{4}\w{4}$)/:any'
  
 All descriptions of the segments have a certain weight. 
 Thus, the description C<:enum> has the greatest weight, a description of C<:re> weighs even less. Weakest coincidence is C<:any>.
@@ -144,7 +148,7 @@ sub add_rule {
     
     my @depth = split '/',$args{connect},-1;
     
-    my @segment = (); my $i = 0;
+    my $named_segment = {}; my $i = 0;
     
     my $res = [];
     for (@methods) {
@@ -155,16 +159,16 @@ sub add_rule {
     (my $tmp = $args{connect}) =~ s!  
                 (/)(?=/)                    | # double slash
                 (/$)                        | # end slash
-                /:enum\(([^/]+)\)(?= $|/)   | # enum
-                /:re\(([^/]+)\)(?= $|/)     | # re
-                /(:any)(?= $|/)             | # any
-                /([^/]+)(?= $|/)              # eq
+                /(:name\(["']?(.*?)["']?\))?:enum\(([^/]+)\)(?= $|/)   | # enum
+                /(:name\(["']?(.*?)["']?\))?:re\(([^/]+)\)(?= $|/)     | # re
+                /(:name\(["']?(.*?)["']?\))?(:any)(?= $|/)             | # any
+                /(:name\(["']?(.*?)["']?\))?([^/]+)(?= $|/)              # eq
             !
                 if ($1 or $2) {                    
                     $_->{exactly}->{''} ||= {} for @$res;
                     $res = [map {$_->{exactly}->{''}} @$res];
-                } elsif ($3) {
-                    my @val = split('\|',$3);
+                } elsif ($5) {
+                    my @val = split('\|',$5);
                     my @tmp;
                     for my $val (@val) {
                         for (@$res) {
@@ -173,19 +177,20 @@ sub add_rule {
                         };
                     }
                     $res = [@tmp];
-                    push @segment, $i;
-                } elsif ($4) {
-                    $self->{re_compile}->{$4} = qr{$4}s;
-                    $_->{regexp}->{$4} ||= {} for @$res;
-                    $res = [map {$_->{regexp}->{$4}} @$res];
-                    push @segment, $i;
-                } elsif ($5) {
+                    $named_segment->{$i} = $4 if $4;
+                } elsif ($8) {
+                    $self->{re_compile}->{$8} = qr{$8}s;
+                    $_->{regexp}->{$8} ||= {} for @$res;
+                    $res = [map {$_->{regexp}->{$8}} @$res];
+                    $named_segment->{$i} = $7 if $7;
+                } elsif ($11) {
                     $_->{default}->{''} ||= {} for @$res;
                     $res = [map {$_->{default}->{''}} @$res];
-                    push @segment, $i;
-                } elsif ($6) {
-                    $_->{exactly}->{$6} ||= {} for @$res;
-                    $res = [map {$_->{exactly}->{$6}} @$res];
+                    $named_segment->{$i} = $10 if $10;
+                } elsif ($14) {
+                    $_->{exactly}->{$14} ||= {} for @$res;
+                    $res = [map {$_->{exactly}->{$14}} @$res];
+                    $named_segment->{$i} = $13 if $13;
                 } else {
                     # default as word
                     croak "cant't resolve connect '$args{connect}'"
@@ -193,11 +198,10 @@ sub add_rule {
                 $i++;
             !gex;
         
-        my $has_segment = @segment;
         for (@$res) {
             if (not $_->{match} or $_->{match}->[3] >= $methods_weight) {
                 # set only if no match or a match for a more accurate description
-                $_->{match} = [$args{action}, $has_segment ? [@segment] : undef, $sub_after_match, $methods_weight];
+                $_->{match} = [$args{action}, keys %$named_segment ? $named_segment : undef, $sub_after_match, $methods_weight];
             }
         }
 
@@ -242,7 +246,7 @@ If a match is found, it returns hashref:
     {
         type => 'controller',
         action => $action,
-        segment => $arrayref
+        name_segments => $arrayref
     }
 
 Otherwise, undef. 
@@ -263,9 +267,13 @@ sub match {
     if ($match) {
         my $ret = {
             type => 'controller',
-            action => $match->[0],
-            segment => $match->[1] ? [map {$env->{'psgix.tmp.RouterPathInfo'}->{segments}->[$_]} @{$match->[1]}] : []
+            action => $match->[0]
         };
+        unless ($match->[1]) {
+            $ret->{name_segments} = {};
+        } else {
+            $ret->{name_segments}->{$match->[1]->{$_}} = $env->{'psgix.tmp.RouterPathInfo'}->{segments}->[$_] for keys %{$match->[1]};
+        }
         $ret->{_callback} = $match->[2] if $match->[2];
         return ($not_exactly, $ret);
     } else {

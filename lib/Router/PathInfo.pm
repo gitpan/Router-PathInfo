@@ -2,7 +2,7 @@ package Router::PathInfo;
 use strict;
 use warnings;
 
-our $VERSION = '0.03';
+our $VERSION = '0.04';
 
 use namespace::autoclean;
 use Carp;
@@ -18,6 +18,10 @@ B<Router::PathInfo> - PATH_INFO router, based on search trees
 
 Allows balancing PATH_INFO to static and controllers.
 It has a simple and intuitive interface.
+
+=head1 WARNING
+
+Version less than 0.04 is depricated.
 
 =head1 SYNOPSIS
 
@@ -36,9 +40,9 @@ It has a simple and intuitive interface.
         },
         cache_limit => 300
     );
-        
+    
     $r->add_rule(
-        connect         => '/foo/:enum(bar|baz)/:re(^\d{4}$)/:any', 
+        connect         => '/foo/:enum(bar|baz)/:name(year):re(^\d{4}$)/:any', 
         action          => $some_thing,
         mthods          => ['GET','DELETE'],
         match_callback  => $code_ref
@@ -53,8 +57,9 @@ It has a simple and intuitive interface.
     # $res = {
     #     type => 'controller',
     #     action => $some, # result call $code_ref->($match, $env)
-    #     segment => ['bar','2011','baz']
+    #     name_segments => {'year' => 2011}
     # }
+    
     
     $env = {PATH_INFO => '/static/img/some.jpg'};
     
@@ -178,7 +183,7 @@ Example:
     {
         type => 'controller',
         action => $action,
-        segment => $array_ref_of_segments 
+        name_segments => $hashref_of_names_segments 
     }
     
     {
